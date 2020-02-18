@@ -1,0 +1,264 @@
+
+<!DOCTYPE html>
+
+<!--
+
+lcdchargen -- Custom Character Generator for HD44780 LCD Modules
+
+----------------------------------------------------------------------------
+"THE BEER-WARE LICENSE" (Revision 42):
+<omerkilic@gmail.com> wrote this file. As long as you retain this notice you
+can do whatever you want with this stuff. If we meet some day, and you think
+this stuff is worth it, you can buy me a beer in return. Omer Kilic
+----------------------------------------------------------------------------
+
+https://omerk.github.io/lcdchargen/
+
+-->
+
+<html>
+
+<head>
+    <meta charset=utf-8 />
+    <title>Custom Character Generator for HD44780 LCD Modules</title>
+    <style type="text/css">
+        body {
+            text-align: center;
+        }
+        
+        textarea {
+			font-family: monospace; 
+			text-align: left;
+			height: 140px;
+			width: 50%;
+		}
+
+		a {
+			cursor: pointer;
+		}
+		      
+        #app {
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        #code {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+		}
+		
+		#app {
+			/* nop */
+		}
+		
+		.line {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+		}
+        
+		.character {
+			width: 130px;
+			/*float: left;*/
+		}
+		
+        .pixel {
+            width: 20px;
+            height: 20px;
+			border: 1px solid #ccc;
+			margin: 1px;
+        }
+
+        .on {
+            background: #5EFB6E;
+        }
+        
+        .off {
+            background: #484848;
+		}
+		
+    </style>
+
+	<script src="https://cdn.jsdelivr.net/npm/vue@2.6.0"></script>
+    <script>
+
+		// a single character (5 * 8 dots)
+		Vue.component('lcd-character', {
+			data: function () {
+				return {
+					index: 0,
+					pixels: new Array(5*8)
+				}
+			},
+			methods: {				
+				clear: function() {
+					this.pixels.fill(0);
+					// https://vuejs.org/v2/guide/list.html#Array-Change-Detection
+					Vue.set(this.pixels, 0, this.pixels[0]);
+					this._fire();
+				},
+				invert: function() {
+					this.pixels = this.pixels.map(function(value) { return  (1 - value); })
+					this._fire();
+				},
+				toggle: function (index) {
+					Vue.set(this.pixels, index, 1 - this.pixels[index]);
+					this._fire();			
+				},
+				_fire: function() {
+					this.$emit('changed', { "index": this.index, "data": this.pixels.slice(0) })
+				}
+			},
+			created: function () {
+				this.index = this.$next();
+				this.pixels.fill(0);
+			},
+			template:
+				'<div class="character">' +
+				'<canvas v-for="(item, index) in pixels" v-on:click="toggle(index)" ' +
+					'v-bind:id="\'pixel-\' + Math.floor(index / 5) + \'-\' + (index % 5)" ' + 
+					'class="pixel" v-bind:class="[ pixels[index] == 1 ? \'on\' : \'off\' ]"></canvas>' +
+				'<br/> <a v-on:click="clear">clear</a> | <a v-on:click="invert">invert</a>' +
+				'</div>'
+			}
+		);
+
+		// vue.js marche mieux une fois que le DOM est complètement chargé ^^
+		window.onload = function(previousHandler) { 
+
+			return function(e) {
+
+				// pour éviter les effets de bord, appelle
+				// le handler précédemment défini (s'il y en a un)
+				if(previousHandler) {
+					previousHandler(e);
+				}
+
+				// generate unique identifier
+				// shared between Vue instances
+				Vue.prototype.$next = function() {
+					current = 0;
+					return function() {
+						return current++;
+					}
+				}();
+
+				new Vue({
+					el: '#app',
+					
+					data: function() {
+						return {
+							readOnly: true,
+							characters : {} /* child index -> pixels */,
+							output: ''
+						}
+					},
+					methods: {
+						load: function() {
+							lines = this.output.split("\n");
+							// « lcd.load_custom_char(4, [0b00000,0b00000,0b00000,0b00000,0b00100,0b00100,0b00000,0b00000]) »
+							lines.forEach((element) => {
+								// find character number and pattern
+								matches = element.match(/([0-9]).+\[(.*)\]/)
+								if(matches) {
+									characterNumber = +matches[1];
+									// TODO check number is between 0 and 7
+
+									// each character should have eight lines of 5 bits
+									matches[2].split(',').forEach((value, valueIndex) => {
+
+										// convert value as binary string (if not already)
+										if(value.startsWith('0x')) {
+											value = value.substr(2).toString(2);
+										} else if(value.startsWith('0b')) {
+											value = value.substr(2);
+										} else {
+											value = (+value).toString(2);
+										}
+										
+										// values should be only 5 bits long
+										while(value.length > 5) {
+											value = value.substr(1);
+										}
+ 										while(value.length < 5) {
+											 value = "0" + value;
+										}
+
+										component = this.$children[characterNumber];
+										// iterate over bits
+										value.split('').forEach((bit, bitIndex) => {
+											index = (valueIndex * 5) + bitIndex;
+											Vue.set(component.pixels, index, +bit);
+										});
+									});
+
+								}
+							});
+							console.log(this.output)
+						},
+						changed: function(any) {
+							this.characters[any.index] = any.data.slice(0);
+							this._generate();
+						},
+						_generate: function() {
+							result = ''
+							// for each character ...
+							for(let prop of Object.keys(this.characters)) {
+								line = ''
+								for(k=0; k<this.characters[prop].length; k++) {
+									if(k % 5 == 0) {
+										line += ',0b';
+									}
+									line += this.characters[prop][k]
+								}
+								result += 'lcd.load_custom_char(' + prop + ', [' + line.substr(1) + '])' + "\n";
+							}
+							this.output = result;
+							this.readOnly = true;
+						}
+					}
+
+				});
+
+			};
+
+		}(window.onload);
+
+    </script>
+
+</head>
+
+<body>
+    <h1>Custom Character Generator<br />for HD44780 LCD Modules</h1>
+    <span>Click pixels to generate output.</span>
+
+    <div id="app">
+		
+		<div id="pixels">
+			<div class="line">
+				<lcd-character ref="details-child" @changed="changed"></lcd-character>
+				<lcd-character ref="details-child" @changed="changed"></lcd-character>
+				<lcd-character ref="details-child" @changed="changed"></lcd-character>
+				<lcd-character ref="details-child" @changed="changed"></lcd-character>
+			</div>
+			<div class="line">
+				<lcd-character ref="details-child" @changed="changed"></lcd-character>
+				<lcd-character ref="details-child" @changed="changed"></lcd-character>
+				<lcd-character ref="details-child" @changed="changed"></lcd-character>
+				<lcd-character ref="details-child" @changed="changed"></lcd-character>
+			</div>
+		</div>
+		
+		<h2>Output<small>&nbsp;&nbsp;<a v-if="readOnly" v-on:click="readOnly = false">(edit)</a>
+			<span v-if="!readOnly">
+				<a v-on:click="load(); readOnly = true">load</a> | <a v-on:click="readOnly = true">cancel</a>	
+			</span></small></h2>
+        <div id="code">
+			<textarea id="output" v-model="output" v-bind:readonly="readOnly"></textarea>
+			
+        </div>
+        
+    </div>
+</body>
+</html>
